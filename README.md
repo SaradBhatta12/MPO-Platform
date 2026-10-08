@@ -1,98 +1,90 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Merchant onboarding API
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Private NestJS backend for merchant applications and risk review. This repository currently implements **Part 1: the technology foundation**. Authentication, application workflows, risk processing, and audit behavior are planned for Parts 2–4; the tests and final submission review are Part 5. No frontend or payment processing is in scope.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Architecture
 
-## Description
+NestJS controllers handle HTTP, services will own business rules, and TypeORM repositories persist data in PostgreSQL. Redis and BullMQ provide the `merchant-risk` queue. The planned application submission flow will write the application and an outbox row in one PostgreSQL transaction; a dispatcher will enqueue the risk job. The API container runs migrations before accepting traffic. `/health` checks PostgreSQL and Redis.
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+Planned relationships:
 
-## Project setup
+| Relationship | Meaning |
+| --- | --- |
+| User → applications (`createdById`) | One SALES user creates many applications |
+| User → applications (`assignedReviewerId`) | One REVIEWER may be assigned many applications |
+| Application → risk checks | One record per submission version |
+| Application → decisions | Review history for an application |
+| Application → audit events | Trace of changes and decisions |
+| Application → outbox events | Durable pending queue dispatches |
 
-```bash
-$ pnpm install
-```
+Only the `users` table and its explicit migration exist in Part 1. TypeORM schema synchronization is disabled.
 
-## Compile and run the project
+## Planned permissions
 
-```bash
-# development
-$ pnpm run start
+| Action | ADMIN | SALES | REVIEWER |
+| --- | --- | --- | --- |
+| Create application | Yes | Yes | No |
+| List and view | All | Own | Assigned |
+| Edit and submit | All eligible | Own eligible | No |
+| Assign reviewer | Yes | No | No |
+| Record decision | No | No | Assigned only |
 
-# watch mode
-$ pnpm run start:dev
+An ADMIN account is not a REVIEWER, so it cannot record a decision under the assigned-reviewer rule.
 
-# production mode
-$ pnpm run start:prod
-```
+## Planned application transitions
 
-## Run tests
+| From | To | Trigger / condition |
+| --- | --- | --- |
+| New | DRAFT | Create application |
+| DRAFT | SUBMITTED | Submit; start a new risk version |
+| INFO_REQUESTED | SUBMITTED | Resubmit; start a new risk version |
+| SUBMITTED | UNDER_REVIEW | Reviewer assigned and current risk check finished |
+| UNDER_REVIEW | INFO_REQUESTED | Assigned reviewer requests information |
+| UNDER_REVIEW | APPROVED | Assigned reviewer approves |
+| UNDER_REVIEW | REJECTED | Assigned reviewer rejects |
 
-```bash
-# unit tests
-$ pnpm run test
+`DRAFT` and `INFO_REQUESTED` allow merchant detail edits. `APPROVED` and `REJECTED` are terminal. A final automated `FAILED` risk result indicates the check could not complete; it is not a merchant rejection. `FLAGGED` requires manual attention.
 
-# e2e tests
-$ pnpm run test:e2e
+## Part 1 setup
 
-# test coverage
-$ pnpm run test:cov
-```
+Use Node.js 22 and npm. The container image uses Node 22; `.nvmrc` selects the same major for local development. Selected package versions include `@nestjs/core` 11.2.7, `@nestjs/typeorm` 11.0.3, TypeORM 0.3.31, `@nestjs/bullmq` 11.0.5, BullMQ 5.81.5, `pg` 8.23.1, `@nestjs/swagger` 11.4.7, and bcrypt 6.0.0. Exact resolved versions for every dependency are in `package-lock.json`.
 
-## Deployment
+1. Copy `.env.example` to `.env` and replace every placeholder with local-only values. `.env` is ignored by Git.
+2. Install dependencies with `npm ci`.
+3. Start dependencies with `docker compose up -d postgres redis`.
+4. Run `npm run migration:run`.
+5. Set the five `SEED_*_PASSWORD` values to distinct passwords of at least 12 characters, then run `npm run seed:dev` if fictional development users are needed.
+6. Start the API with `npm run start:dev`.
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+Alternatively, `docker compose up --build` builds and runs all three services. The API container runs migrations on startup. To seed inside that container, run `docker compose exec api npm run seed:dev:compiled` after setting the seed variables in `.env`.
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+If another local PostgreSQL instance uses port 5432, set `DATABASE_PORT=5433` in `.env` before starting Compose. The API container still connects to PostgreSQL on its internal port 5432.
 
-```bash
-$ pnpm install -g @nestjs/mau
-$ mau deploy
-```
+The API health endpoint is `http://localhost:3000/health`. Swagger is at `http://localhost:3000/docs`. Swagger's bearer scheme is configured; protected endpoints arrive in Part 2.
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+## Commands
 
-## Resources
+| Command | Purpose |
+| --- | --- |
+| `npm run build` | Compile strict TypeScript |
+| `npm run lint` | Check source and tests |
+| `npm test` | Run unit tests |
+| `npm run test:e2e` | Run API tests once the test database is configured |
+| `npm run migration:run` | Apply local TypeScript migrations |
+| `npm run migration:show` | Show local migration status |
+| `npm run migration:revert` | Revert the most recent migration |
+| `npm run seed:dev` | Insert fictional development users |
 
-Check out a few resources that may come in handy when working with NestJS:
+Example request: `curl http://localhost:3000/health` returns `{"status":"ok"}` when both dependencies respond. Merchant application examples will be added with Part 3.
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+## Security and trade-offs
 
-## Support
+The seed command refuses to run with `NODE_ENV=production` and refuses placeholder or short passwords. It hashes seed passwords with bcrypt. The user entity excludes `passwordHash` from default queries. Global DTO validation rejects unknown fields, and the HTTP exception filter suppresses internal errors. Request IDs are returned in `x-request-id` and can be propagated with a UUID header.
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+In production, owner name, contact email, and contact phone would need field-level encryption. Keys should come from a managed key service and be rotated without placing them in Git or the database. Encryption is **not implemented** in Part 1. The development Compose file publishes database and Redis ports for local tools; production deployment would keep them private.
 
-## Stay in touch
+This code and assignment must remain private. Do not commit `.env`, secrets, build output, or `node_modules`. Do not create a GitHub repository or grant reviewer access without explicit instruction.
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+## AI assistance and verification
 
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+OpenAI Codex assisted with the Part 1 architecture, package setup, infrastructure configuration, migration, and documentation. Part 1 verification: local build and lint passed; two configuration tests passed; a fresh PostgreSQL 16 database applied the migration; both source and compiled development seeds ran; the Node 22 API container became healthy; `/health` and Swagger returned HTTP 200; the production dependency audit found zero vulnerabilities. The remaining 20 moderate audit findings are in development dependencies. The full API/worker integration suite belongs to later parts and has not run.
