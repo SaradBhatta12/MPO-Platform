@@ -107,6 +107,18 @@ export class Environment {
   @Min(1)
   @Max(1000)
   REFRESH_RATE_LIMIT_IP = 60;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(100)
+  @Max(60000)
+  RISK_DISPATCH_INTERVAL_MS = 1000;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(100)
+  @Max(60000)
+  RISK_RETRY_DELAY_MS = 500;
 }
 
 export function validateEnvironment(

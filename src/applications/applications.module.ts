@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AuditModule } from '../audit/audit.module';
 import { AuthModule } from '../auth/auth.module';
 import { MerchantApplication } from './application.entity';
 import { ApplicationsController } from './applications.controller';
@@ -9,6 +10,7 @@ import { ReviewDecision } from './review-decision.entity';
 @Module({
   imports: [
     AuthModule,
+    AuditModule,
     TypeOrmModule.forFeature([MerchantApplication, ReviewDecision]),
   ],
   controllers: [ApplicationsController],

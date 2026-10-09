@@ -39,7 +39,8 @@ export class AuthService {
       password,
       user?.passwordHash ?? DUMMY_BCRYPT_HASH,
     );
-    if (!user || !matches) {
+    // bcrypt ignores bytes beyond 72; never accept a longer password as an alias.
+    if (!user || !matches || Buffer.byteLength(password, 'utf8') > 72) {
       throw new UnauthorizedException('Invalid credentials');
     }
 

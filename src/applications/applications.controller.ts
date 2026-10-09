@@ -10,6 +10,7 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -23,6 +24,7 @@ import {
 } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RequestWithId } from '../common/request-id.interceptor';
 import { UserResponseDto } from '../users/dto/user-response.dto';
 import { ApplicationsService } from './applications.service';
 import { AssignReviewerDto } from './dto/assign-reviewer.dto';
@@ -51,8 +53,9 @@ export class ApplicationsController {
   create(
     @CurrentUser() actor: UserResponseDto,
     @Body() input: CreateApplicationDto,
+    @Req() request: RequestWithId,
   ): Promise<ApplicationResponseDto> {
-    return this.applications.create(actor, input);
+    return this.applications.create(actor, input, request.requestId ?? null);
   }
 
   @Get()
@@ -82,8 +85,14 @@ export class ApplicationsController {
     @CurrentUser() actor: UserResponseDto,
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() input: UpdateApplicationDto,
+    @Req() request: RequestWithId,
   ): Promise<ApplicationResponseDto> {
-    return this.applications.update(actor, id, input);
+    return this.applications.update(
+      actor,
+      id,
+      input,
+      request.requestId ?? null,
+    );
   }
 
   @Post(':id/submit')
@@ -93,8 +102,9 @@ export class ApplicationsController {
   submit(
     @CurrentUser() actor: UserResponseDto,
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Req() request: RequestWithId,
   ): Promise<ApplicationResponseDto> {
-    return this.applications.submit(actor, id);
+    return this.applications.submit(actor, id, request.requestId ?? null);
   }
 
   @Patch(':id/assignment')
@@ -104,8 +114,14 @@ export class ApplicationsController {
     @CurrentUser() actor: UserResponseDto,
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() input: AssignReviewerDto,
+    @Req() request: RequestWithId,
   ): Promise<ApplicationResponseDto> {
-    return this.applications.assign(actor, id, input);
+    return this.applications.assign(
+      actor,
+      id,
+      input,
+      request.requestId ?? null,
+    );
   }
 
   @Post(':id/decision')
@@ -116,7 +132,13 @@ export class ApplicationsController {
     @CurrentUser() actor: UserResponseDto,
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() input: RecordDecisionDto,
+    @Req() request: RequestWithId,
   ): Promise<ApplicationResponseDto> {
-    return this.applications.decide(actor, id, input);
+    return this.applications.decide(
+      actor,
+      id,
+      input,
+      request.requestId ?? null,
+    );
   }
 }

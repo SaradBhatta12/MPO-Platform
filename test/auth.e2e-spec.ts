@@ -19,6 +19,8 @@ const unknownEmail = `unknown.${randomUUID()}@example.test`;
 const testPassword = 'fictional-integration-password-1234';
 const registrationEmail = `registration.${randomUUID()}@example.test`;
 const registrationPassword = 'fictional-registration-password-1234';
+const boundaryEmail = `boundary.${randomUUID()}@example.test`;
+const boundaryPassword = 'a'.repeat(72);
 
 function responseBody(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -115,6 +117,7 @@ describe('authentication API', () => {
     if (dataSource?.isInitialized) {
       await dataSource.getRepository(User).delete({ email: testEmail });
       await dataSource.getRepository(User).delete({ email: registrationEmail });
+      await dataSource.getRepository(User).delete({ email: boundaryEmail });
       await dataSource.destroy();
     }
   });
@@ -321,6 +324,37 @@ describe('authentication API', () => {
     expect(responseBody(wrongPassword.body).message).toBe(
       'Invalid credentials',
     );
+  });
+
+  it('rejects a suffix beyond the bcrypt input limit', async () => {
+    await dataSource.getRepository(User).insert({
+      email: boundaryEmail,
+      role: UserRole.SALES,
+      passwordHash: await bcrypt.hash(boundaryPassword, 12),
+    });
+    await request(server)
+      .post('/auth/login')
+      .send({ email: boundaryEmail, password: boundaryPassword })
+      .expect(200);
+    const extended = await request(server)
+      .post('/auth/login')
+      .send({ email: boundaryEmail, password: `${boundaryPassword}extra` })
+      .expect(401);
+    expect(responseBody(extended.body).message).toBe('Invalid credentials');
+  });
+
+  it('sets safe response headers for success and errors', async () => {
+    for (const response of [
+      await request(server).get('/health').expect(200),
+      await request(server).get('/auth/me').expect(401),
+    ]) {
+      expect(response.headers['cache-control']).toBe('no-store');
+      expect(response.headers['x-content-type-options']).toBe('nosniff');
+      expect(response.headers['x-frame-options']).toBe('DENY');
+      expect(response.headers['referrer-policy']).toBe('no-referrer');
+      expect(response.headers['x-powered-by']).toBeUndefined();
+      expect(response.headers.etag).toBeUndefined();
+    }
   });
 
   it('rejects unknown login fields and missing or invalid tokens', async () => {

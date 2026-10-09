@@ -45,14 +45,18 @@ async function seed(): Promise<void> {
     if (
       !password ||
       password.startsWith('replace-with-') ||
-      password.length < 12
+      password.length < 12 ||
+      Buffer.byteLength(password, 'utf8') > 72
     ) {
       throw new Error(
-        `Set a local password of at least 12 characters for ${passwordVariable}`,
+        `Set a local password of at least 12 characters and at most 72 UTF-8 bytes for ${passwordVariable}`,
       );
     }
     return password;
   });
+  if (new Set(passwords).size !== passwords.length) {
+    throw new Error('Use a different password for each seeded user');
+  }
 
   await dataSource.initialize();
   try {

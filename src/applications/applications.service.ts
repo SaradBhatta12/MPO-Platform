@@ -8,6 +8,14 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository, SelectQueryBuilder } from 'typeorm';
+import { AuditAction } from '../audit/audit-event.entity';
+import {
+  AuditService,
+  SAFE_APPLICATION_FIELD_NAMES,
+} from '../audit/audit.service';
+import { RiskCheck } from '../risk/risk-check.entity';
+import { riskJobId } from '../risk/risk-job';
+import { RiskOutbox } from '../risk/risk-outbox.entity';
 import { UserResponseDto } from '../users/dto/user-response.dto';
 import { User, UserRole } from '../users/user.entity';
 import {
@@ -71,6 +79,7 @@ function canonicalMoney(value: string): string {
 export class ApplicationsService {
   constructor(
     private readonly dataSource: DataSource,
+    private readonly audit: AuditService,
     @InjectRepository(MerchantApplication)
     private readonly applications: Repository<MerchantApplication>,
   ) {}
@@ -78,28 +87,42 @@ export class ApplicationsService {
   async create(
     actor: UserResponseDto,
     input: CreateApplicationDto,
+    requestId: string | null,
   ): Promise<ApplicationResponseDto> {
     this.requireOperator(actor);
-    const application = await this.applications.save({
-      id: randomUUID(),
-      businessName: input.businessName.trim(),
-      legalBusinessName: input.legalBusinessName.trim(),
-      businessType: input.businessType.trim(),
-      ownerName: input.ownerName.trim(),
-      contactEmail: input.contactEmail,
-      contactPhone: input.contactPhone.trim(),
-      requestedMonthlyVolume: canonicalMoney(input.requestedMonthlyVolume),
-      averageTransactionAmount: canonicalMoney(input.averageTransactionAmount),
-      currency: input.currency,
-      applicationStatus: ApplicationStatus.DRAFT,
-      riskStatus: RiskStatus.NOT_STARTED,
-      submissionVersion: 0,
-      createdById: actor.id,
-      assignedReviewerId: null,
-      submittedAt: null,
-      reviewedAt: null,
+    return this.dataSource.transaction(async (manager) => {
+      const application = await manager
+        .getRepository(MerchantApplication)
+        .save({
+          id: randomUUID(),
+          businessName: input.businessName.trim(),
+          legalBusinessName: input.legalBusinessName.trim(),
+          businessType: input.businessType.trim(),
+          ownerName: input.ownerName.trim(),
+          contactEmail: input.contactEmail,
+          contactPhone: input.contactPhone.trim(),
+          requestedMonthlyVolume: canonicalMoney(input.requestedMonthlyVolume),
+          averageTransactionAmount: canonicalMoney(
+            input.averageTransactionAmount,
+          ),
+          currency: input.currency,
+          applicationStatus: ApplicationStatus.DRAFT,
+          riskStatus: RiskStatus.NOT_STARTED,
+          submissionVersion: 0,
+          createdById: actor.id,
+          assignedReviewerId: null,
+          submittedAt: null,
+          reviewedAt: null,
+        });
+      await this.audit.record(manager, {
+        actorUserId: actor.id,
+        action: AuditAction.APPLICATION_CREATED,
+        applicationId: application.id,
+        requestId,
+        metadata: { status: ApplicationStatus.DRAFT },
+      });
+      return toApplicationResponse(application);
     });
-    return toApplicationResponse(application);
   }
 
   async list(
@@ -147,6 +170,7 @@ export class ApplicationsService {
     actor: UserResponseDto,
     id: string,
     input: UpdateApplicationDto,
+    requestId: string | null,
   ): Promise<ApplicationResponseDto> {
     this.requireOperator(actor);
     if (Object.keys(input).length === 0) {
@@ -184,13 +208,26 @@ export class ApplicationsService {
         );
       }
       if (input.currency !== undefined) application.currency = input.currency;
-      return toApplicationResponse(await manager.save(application));
+      const saved = await manager.save(application);
+      await this.audit.record(manager, {
+        actorUserId: actor.id,
+        action: AuditAction.APPLICATION_UPDATED,
+        applicationId: id,
+        requestId,
+        metadata: {
+          fields: Object.keys(input)
+            .filter((name) => SAFE_APPLICATION_FIELD_NAMES.has(name))
+            .sort(),
+        },
+      });
+      return toApplicationResponse(saved);
     });
   }
 
   async submit(
     actor: UserResponseDto,
     id: string,
+    requestId: string | null,
   ): Promise<ApplicationResponseDto> {
     this.requireOperator(actor);
     return this.dataSource.transaction(async (manager) => {
@@ -210,7 +247,30 @@ export class ApplicationsService {
       application.riskStatus = RiskStatus.PENDING;
       application.submittedAt = new Date();
       application.reviewedAt = null;
-      return toApplicationResponse(await manager.save(application));
+      const saved = await manager.save(application);
+      await manager.insert(RiskCheck, {
+        applicationId: id,
+        submissionVersion: saved.submissionVersion,
+        status: RiskStatus.PENDING,
+        resultSummary: null,
+        attemptCount: 0,
+        startedAt: null,
+        completedAt: null,
+      });
+      await manager.insert(RiskOutbox, {
+        applicationId: id,
+        submissionVersion: saved.submissionVersion,
+        jobId: riskJobId(id, saved.submissionVersion),
+        dispatchedAt: null,
+      });
+      await this.audit.record(manager, {
+        actorUserId: actor.id,
+        action: AuditAction.APPLICATION_SUBMITTED,
+        applicationId: id,
+        requestId,
+        metadata: { submissionVersion: saved.submissionVersion },
+      });
+      return toApplicationResponse(saved);
     });
   }
 
@@ -218,6 +278,7 @@ export class ApplicationsService {
     actor: UserResponseDto,
     id: string,
     input: AssignReviewerDto,
+    requestId: string | null,
   ): Promise<ApplicationResponseDto> {
     if (actor.role !== UserRole.ADMIN) {
       throw new ForbiddenException('Only admins can assign reviewers');
@@ -244,6 +305,7 @@ export class ApplicationsService {
       if (reviewer?.role !== UserRole.REVIEWER) {
         throw new BadRequestException('Reviewer ID must identify a reviewer');
       }
+      const previousReviewerId = application.assignedReviewerId;
       application.assignedReviewerId = reviewer.id;
       if (
         application.applicationStatus === ApplicationStatus.SUBMITTED &&
@@ -251,7 +313,18 @@ export class ApplicationsService {
       ) {
         application.applicationStatus = ApplicationStatus.UNDER_REVIEW;
       }
-      return toApplicationResponse(await manager.save(application));
+      const saved = await manager.save(application);
+      await this.audit.record(manager, {
+        actorUserId: actor.id,
+        action: AuditAction.REVIEWER_ASSIGNED,
+        applicationId: id,
+        requestId,
+        metadata: {
+          reviewerId: reviewer.id,
+          reassigned: previousReviewerId !== null,
+        },
+      });
+      return toApplicationResponse(saved);
     });
   }
 
@@ -259,6 +332,7 @@ export class ApplicationsService {
     actor: UserResponseDto,
     id: string,
     input: RecordDecisionDto,
+    requestId: string | null,
   ): Promise<ApplicationResponseDto> {
     if (actor.role !== UserRole.REVIEWER) {
       throw new ForbiddenException('Only assigned reviewers can decide');
@@ -286,7 +360,18 @@ export class ApplicationsService {
       });
       application.applicationStatus = toApplicationStatus(input.decision);
       application.reviewedAt = new Date();
-      return toApplicationResponse(await manager.save(application));
+      const saved = await manager.save(application);
+      await this.audit.record(manager, {
+        actorUserId: actor.id,
+        action: AuditAction.REVIEW_DECIDED,
+        applicationId: id,
+        requestId,
+        metadata: {
+          decision: saved.applicationStatus,
+          submissionVersion: saved.submissionVersion,
+        },
+      });
+      return toApplicationResponse(saved);
     });
   }
 
