@@ -1,25 +1,25 @@
 # Merchant onboarding API
 
-Private NestJS backend for merchant applications and risk review. **Parts 1 and 2 are implemented:** the technology foundation, fictional users, and session-backed access and refresh tokens. Application workflows, risk processing, and audit behavior are planned for Parts 3–4; the final test and submission review is Part 5. No frontend or payment processing is in scope.
+Private NestJS backend for merchant applications and risk review. **Parts 1–3 are implemented:** the technology foundation, fictional users, session-backed authentication, and merchant application lifecycle. Asynchronous risk processing and audit behavior are planned for Part 4; the final test and submission review is Part 5. No frontend or payment processing is in scope.
 
 ## Architecture
 
 NestJS controllers handle HTTP, services will own business rules, and TypeORM repositories persist data in PostgreSQL. Redis and BullMQ provide the `merchant-risk` queue. The planned application submission flow will write the application and an outbox row in one PostgreSQL transaction; a dispatcher will enqueue the risk job. The API container runs migrations before accepting traffic. `/health` checks PostgreSQL and Redis.
 
-Planned relationships:
+Entity relationships:
 
 | Relationship | Meaning |
 | --- | --- |
-| User → applications (`createdById`) | One SALES user creates many applications |
-| User → applications (`assignedReviewerId`) | One REVIEWER may be assigned many applications |
-| Application → risk checks | One record per submission version |
-| Application → decisions | Review history for an application |
-| Application → audit events | Trace of changes and decisions |
-| Application → outbox events | Durable pending queue dispatches |
+| User → applications (`createdById`) | A SALES or ADMIN user creates many applications; implemented |
+| User → applications (`assignedReviewerId`) | A REVIEWER may be assigned many applications; implemented |
+| Application → decisions | One recorded decision per submission version; implemented |
+| Application → risk checks | One record per submission version; planned for Part 4 |
+| Application → audit events | Trace of changes and decisions; planned for Part 4 |
+| Application → outbox events | Durable pending queue dispatches; planned for Part 4 |
 
 The implemented authentication relationships are `User → auth sessions → refresh tokens`. The explicit migrations create these tables and indexes. TypeORM schema synchronization is disabled.
 
-## Planned permissions
+## Permissions
 
 | Action | ADMIN | SALES | REVIEWER |
 | --- | --- | --- | --- |
@@ -31,7 +31,7 @@ The implemented authentication relationships are `User → auth sessions → ref
 
 An ADMIN account is not a REVIEWER, so it cannot record a decision under the assigned-reviewer rule.
 
-## Planned application transitions
+## Application transitions
 
 | From | To | Trigger / condition |
 | --- | --- | --- |
@@ -43,11 +43,11 @@ An ADMIN account is not a REVIEWER, so it cannot record a decision under the ass
 | UNDER_REVIEW | APPROVED | Assigned reviewer approves |
 | UNDER_REVIEW | REJECTED | Assigned reviewer rejects |
 
-`DRAFT` and `INFO_REQUESTED` allow merchant detail edits. `APPROVED` and `REJECTED` are terminal. A final automated `FAILED` risk result indicates the check could not complete; it is not a merchant rejection. `FLAGGED` requires manual attention.
+`DRAFT` and `INFO_REQUESTED` allow merchant detail edits. `APPROVED` and `REJECTED` are terminal. A final automated `FAILED` risk result indicates the check could not complete; it is not a merchant rejection. `FLAGGED` requires manual attention. An assigned reviewer can enter `UNDER_REVIEW` after a `PASSED`, `FLAGGED`, or `FAILED` result. Part 3 records a new submission version and `PENDING` risk status; the worker that produces risk results and advances already assigned applications will arrive in Part 4. Until then, submissions remain pending through the public API.
 
 ## Setup
 
-Use Node.js 22 and npm. The container image uses Node 22; `.nvmrc` selects the same major for local development. Selected package versions include `@nestjs/core` 11.2.7, `@nestjs/typeorm` 11.0.3, TypeORM 0.3.31, `@nestjs/bullmq` 11.0.5, BullMQ 5.81.5, `pg` 8.23.1, `@nestjs/swagger` 11.4.7, and bcrypt 6.0.0. Exact resolved versions for every dependency are in `package-lock.json`.
+Use Node.js 22 and npm 10.9.9. The container image uses Node 22; `.nvmrc` selects the same major for local development, and `package.json` pins npm. If you use nvm, run `nvm install` and `nvm use` in this directory before `npm ci`. The project uses the committed `package-lock.json`; use npm rather than pnpm so installs match the Docker image and do not generate a second lockfile. If pnpm reports `ERR_PNPM_IGNORED_BUILDS`, switch to Node 22 and run `npm ci` instead of approving pnpm builds. Selected package versions include `@nestjs/core` 11.2.7, `@nestjs/typeorm` 11.0.3, TypeORM 0.3.31, `@nestjs/bullmq` 11.0.5, BullMQ 5.81.5, `pg` 8.23.1, `@nestjs/swagger` 11.4.7, and bcrypt 6.0.0. Exact resolved versions for every dependency are in `package-lock.json`.
 
 1. Copy `.env.example` to `.env` and replace every placeholder with local-only values. `.env` is ignored by Git.
 2. Install dependencies with `npm ci`.
@@ -84,6 +84,35 @@ curl -i -b cookies.txt -X POST http://localhost:3000/auth/logout
 
 Replace the placeholders with values from your local `.env` and login response. The examples use fictional users. Treat `cookies.txt` and access tokens as secrets; do not commit them. In a browser, send same-origin requests so its cookie policy can protect the refresh token.
 
+## Applications
+
+All application routes require a bearer access token. The API accepts decimal money amounts as strings and returns two decimal places as strings. A new application starts as `DRAFT`; a submission increments `submissionVersion` and sets risk status to `PENDING`.
+
+| Route | Allowed roles | Purpose |
+| --- | --- | --- |
+| `POST /applications` | ADMIN, SALES | Create a draft |
+| `GET /applications` | ADMIN, SALES, REVIEWER | List visible applications with `page`, `pageSize`, and `status` filters |
+| `GET /applications/:id` | ADMIN, owner SALES, assigned REVIEWER | View one application |
+| `PATCH /applications/:id` | ADMIN, owner SALES | Edit a draft or information request |
+| `POST /applications/:id/submit` | ADMIN, owner SALES | Submit or resubmit |
+| `PATCH /applications/:id/assignment` | ADMIN | Assign or reassign a REVIEWER |
+| `POST /applications/:id/decision` | Assigned REVIEWER | Approve, reject, or request information from `UNDER_REVIEW` |
+
+The list defaults to page 1 and 20 items, caps `pageSize` at 50, and orders by creation time descending then ID descending. Inaccessible application IDs return 404. Review decisions require a nonblank reason and are stored with the submission version.
+
+```bash
+curl -X POST http://localhost:3000/applications \
+  -H 'Authorization: Bearer <sales-access-token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"businessName":"Fictional Coffee","legalBusinessName":"Fictional Coffee Pvt Ltd","businessType":"PRIVATE_COMPANY","ownerName":"Fictional Owner","contactEmail":"owner@example.test","contactPhone":"+9779800000000","requestedMonthlyVolume":"10000.00","averageTransactionAmount":"25.50","currency":"NPR"}'
+
+curl 'http://localhost:3000/applications?status=DRAFT&page=1&pageSize=20' \
+  -H 'Authorization: Bearer <sales-access-token>'
+
+curl -X POST http://localhost:3000/applications/<application-id>/submit \
+  -H 'Authorization: Bearer <sales-access-token>'
+```
+
 ## Commands
 
 | Command | Purpose |
@@ -91,7 +120,7 @@ Replace the placeholders with values from your local `.env` and login response. 
 | `npm run build` | Compile strict TypeScript |
 | `npm run lint` | Check source and tests |
 | `npm test` | Run unit tests |
-| `npm run test:e2e` | Run real authentication API tests against a separate database |
+| `npm run test:e2e` | Run real authentication and application API tests against a separate database |
 | `npm run migration:run` | Apply local TypeScript migrations |
 | `npm run migration:show` | Show local migration status |
 | `npm run migration:revert` | Revert the most recent migration |
@@ -99,7 +128,7 @@ Replace the placeholders with values from your local `.env` and login response. 
 | `npm run auth:prune` | Delete expired sessions and their refresh-token history |
 | `npm run auth:prune:prod` | Run the compiled session cleanup command |
 
-Example request: `curl http://localhost:3000/health` returns `{"status":"ok"}` when both dependencies respond. Merchant application examples will be added with Part 3.
+Example request: `curl http://localhost:3000/health` returns `{"status":"ok"}` when both dependencies respond.
 
 API tests require the local PostgreSQL and Redis containers and configured `.env` values. The suite creates `merchant_onboarding_test` if needed, runs the real migration, and uses Redis logical database 1. It refuses to run with `NODE_ENV=production`.
 
@@ -111,12 +140,14 @@ Access tokens are HS256 JWTs containing only a user ID and session ID, with fixe
 
 The production cookie uses the `__Host-` prefix, `Secure`, `HttpOnly`, `SameSite=Strict`, and `Path=/`. Development uses an HttpOnly, SameSite Strict cookie on `/auth` so local HTTP works. Cookie-bearing routes reject untrusted `Origin`, `Referer`, and `Sec-Fetch-Site` headers; login also requires JSON. `AUTH_ORIGIN` must be the exact public HTTPS origin in production, and the API must be served over HTTPS. Cross-origin browser clients need a deliberate cookie and CSRF design change. Login and refresh limits use atomic Redis counters per 60 seconds; login limits by both IP and normalized email. Login and refresh fail closed when Redis is unavailable. Configure the application edge to pass the real client IP safely and keep database and Redis private. Do not blindly trust forwarded IP headers.
 
+Application create and update DTOs exclude server-managed fields. PostgreSQL `numeric(18,2)` columns and validation keep monetary values out of JavaScript floating-point calculations. Object-level visibility is applied in SQL queries. Mutations use database row locks and transactions; a unique `(application_id, application_version)` decision constraint adds protection against duplicate decisions. Application responses use explicit field mapping and `Cache-Control: no-store`.
+
 Keep `JWT_SECRET` in a managed secret store, use a long random value, and plan key rotation for production. Password recovery, account lockout policy, device/session management UI, and centralized monitoring are outside Part 2. A successful token design does not replace TLS, deployment hardening, or incident response.
 
-In production, owner name, contact email, and contact phone would need field-level encryption. Keys should come from a managed key service and be rotated without placing them in Git or the database. Encryption is **not implemented** in Part 1. The development Compose file publishes database and Redis ports for local tools; production deployment would keep them private.
+In production, owner name, contact email, and contact phone would need field-level encryption. Keys should come from a managed key service and be rotated without placing them in Git or the database. Encryption is **not implemented**. The development Compose file publishes database and Redis ports for local tools; production deployment would keep them private.
 
 This code and assignment must remain private. Do not commit `.env`, secrets, build output, or `node_modules`. Do not create a GitHub repository or grant reviewer access without explicit instruction.
 
 ## AI assistance and verification
 
-OpenAI Codex assisted with the Part 1 architecture, package setup, infrastructure configuration, migration, and documentation, and with Part 2 authentication code and tests. Part 1 verification: local build and lint passed; a fresh PostgreSQL 16 database applied the migration; both source and compiled development seeds ran; the Node 22 API container became healthy; `/health` and Swagger returned HTTP 200. Part 2 verification: build, lint, three unit tests, and nine real API tests passed against a separate PostgreSQL database and Redis configuration. The rebuilt Node 22 API container became healthy, applied the authentication migration, and passed login, refresh, logout, and access revocation checks. The compiled cleanup command ran successfully. The production dependency audit during the image build found zero vulnerabilities; the build dependency audit reported 20 moderate findings. The application and worker integration suite belongs to later parts and has not run.
+OpenAI Codex assisted with the Part 1 architecture and setup, Part 2 authentication code and tests, and Part 3 application lifecycle code, migration, tests, and documentation. Part 1 verification: local build and lint passed; a fresh PostgreSQL 16 database applied the migration; both source and compiled development seeds ran; the Node 22 API container became healthy; `/health` and Swagger returned HTTP 200. Part 2 verification: build, lint, three unit tests, and nine real API tests passed against a separate PostgreSQL database and Redis configuration. The rebuilt Node 22 API container passed login, refresh, logout, and access revocation checks. The compiled cleanup command ran successfully. Part 3 verification: build, lint, three unit tests, and 17 API tests across both suites passed. The rebuilt container became healthy after the applications migration, and authenticated application listing returned HTTP 200. Part 3 API tests simulate completed risk results in the test database because the risk worker is planned for Part 4. The earlier production dependency audit during the image build found zero vulnerabilities; the build dependency audit reported 20 moderate findings. Worker integration tests have not run.

@@ -1,5 +1,7 @@
 import { join } from 'node:path';
 import { DataSourceOptions } from 'typeorm';
+import { MerchantApplication } from '../applications/application.entity';
+import { ReviewDecision } from '../applications/review-decision.entity';
 import { Environment } from '../config/environment';
 import { AuthSession } from '../auth/auth-session.entity';
 import { RefreshToken } from '../auth/refresh-token.entity';
@@ -24,7 +26,13 @@ export function typeOrmOptions(
     username: environment.DATABASE_USER,
     password: environment.DATABASE_PASSWORD,
     database: environment.DATABASE_NAME,
-    entities: [User, AuthSession, RefreshToken],
+    entities: [
+      User,
+      AuthSession,
+      RefreshToken,
+      MerchantApplication,
+      ReviewDecision,
+    ],
     migrations: [join(__dirname, 'migrations/*{.ts,.js}')],
     migrationsTableName: 'schema_migrations',
     synchronize: false,
