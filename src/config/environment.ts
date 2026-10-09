@@ -94,6 +94,18 @@ export class Environment {
   @IsInt()
   @Min(1)
   @Max(1000)
+  REGISTER_RATE_LIMIT_IP = 10;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(1000)
+  REGISTER_RATE_LIMIT_EMAIL = 3;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(1000)
   REFRESH_RATE_LIMIT_IP = 60;
 }
 

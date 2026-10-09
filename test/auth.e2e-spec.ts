@@ -17,6 +17,8 @@ const testDatabaseName = 'merchant_onboarding_test';
 const testEmail = `auth.${randomUUID()}@example.test`;
 const unknownEmail = `unknown.${randomUUID()}@example.test`;
 const testPassword = 'fictional-integration-password-1234';
+const registrationEmail = `registration.${randomUUID()}@example.test`;
+const registrationPassword = 'fictional-registration-password-1234';
 
 function responseBody(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -60,6 +62,8 @@ describe('authentication API', () => {
     process.env.AUTH_ORIGIN = 'http://localhost:3000';
     process.env.LOGIN_RATE_LIMIT_IP = '1000';
     process.env.LOGIN_RATE_LIMIT_EMAIL = '10';
+    process.env.REGISTER_RATE_LIMIT_IP = '1000';
+    process.env.REGISTER_RATE_LIMIT_EMAIL = '3';
     process.env.REFRESH_RATE_LIMIT_IP = '1000';
     const environment = validateEnvironment(process.env);
 
@@ -110,9 +114,143 @@ describe('authentication API', () => {
     if (app) await app.close();
     if (dataSource?.isInitialized) {
       await dataSource.getRepository(User).delete({ email: testEmail });
+      await dataSource.getRepository(User).delete({ email: registrationEmail });
       await dataSource.destroy();
     }
   });
+
+  it('registers a SALES account without issuing tokens', async () => {
+    const response = await request(server)
+      .post('/auth/register')
+      .send({
+        email: registrationEmail.toUpperCase(),
+        password: registrationPassword,
+      })
+      .expect(202);
+
+    expect(response.body).toEqual({
+      message: 'If the email is eligible, the account is ready for sign in.',
+    });
+    expect(response.headers['set-cookie']).toBeUndefined();
+    expect(response.headers['cache-control']).toBe('no-store');
+
+    const user = await dataSource
+      .getRepository(User)
+      .createQueryBuilder('user')
+      .addSelect('user.passwordHash')
+      .where('user.email = :email', { email: registrationEmail })
+      .getOneOrFail();
+    expect(user.role).toBe(UserRole.SALES);
+    expect(user.passwordHash).not.toBe(registrationPassword);
+    expect(await bcrypt.compare(registrationPassword, user.passwordHash)).toBe(
+      true,
+    );
+
+    const login = await request(server)
+      .post('/auth/login')
+      .send({ email: registrationEmail, password: registrationPassword })
+      .expect(200);
+    const me = await request(server)
+      .get('/auth/me')
+      .set('Authorization', `Bearer ${accessToken(login.body)}`)
+      .expect(200);
+    expect(responseBody(me.body)).toMatchObject({
+      email: registrationEmail,
+      role: UserRole.SALES,
+    });
+  });
+
+  it('returns the same response for an existing account without changing its password', async () => {
+    const before = await dataSource
+      .getRepository(User)
+      .createQueryBuilder('user')
+      .addSelect('user.passwordHash')
+      .where('user.email = :email', { email: registrationEmail })
+      .getOneOrFail();
+    const response = await request(server)
+      .post('/auth/register')
+      .send({
+        email: registrationEmail.toUpperCase(),
+        password: 'another-fictional-password-1234',
+      })
+      .expect(202);
+    expect(response.body).toEqual({
+      message: 'If the email is eligible, the account is ready for sign in.',
+    });
+    const after = await dataSource
+      .getRepository(User)
+      .createQueryBuilder('user')
+      .addSelect('user.passwordHash')
+      .where('user.email = :email', { email: registrationEmail })
+      .getOneOrFail();
+    expect(after.id).toBe(before.id);
+    expect(after.passwordHash).toBe(before.passwordHash);
+    await request(server)
+      .post('/auth/login')
+      .send({ email: registrationEmail, password: registrationPassword })
+      .expect(200);
+    await request(server)
+      .post('/auth/login')
+      .send({
+        email: registrationEmail,
+        password: 'another-fictional-password-1234',
+      })
+      .expect(401);
+  });
+
+  it('rejects role injection, weak passwords, and passwords exceeding bcrypt input', async () => {
+    await request(server)
+      .post('/auth/register')
+      .send({
+        email: `admin-attempt.${randomUUID()}@example.test`,
+        password: registrationPassword,
+        role: UserRole.ADMIN,
+      })
+      .expect(400);
+    await request(server)
+      .post('/auth/register')
+      .send({ email: registrationEmail, password: 'too-short' })
+      .expect(400);
+    await request(server)
+      .post('/auth/register')
+      .send({ email: registrationEmail, password: 'x'.repeat(73) })
+      .expect(400);
+    await request(server)
+      .post('/auth/register')
+      .send({ email: registrationEmail, password: 'é'.repeat(40) })
+      .expect(400);
+  });
+
+  it('requires trusted browser origins and JSON registration bodies', async () => {
+    await request(server)
+      .post('/auth/register')
+      .set('Origin', 'https://attacker.example.test')
+      .send({ email: registrationEmail, password: registrationPassword })
+      .expect(403);
+    await request(server)
+      .post('/auth/register')
+      .type('form')
+      .send({ email: registrationEmail, password: registrationPassword })
+      .expect(415);
+  });
+
+  it('limits repeated registration attempts for one email', async () => {
+    const target = `registration-limit.${randomUUID()}@example.test`;
+    try {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await request(server)
+          .post('/auth/register')
+          .send({ email: target, password: registrationPassword })
+          .expect(202);
+      }
+      await request(server)
+        .post('/auth/register')
+        .send({ email: target, password: registrationPassword })
+        .expect(429);
+    } finally {
+      await dataSource.getRepository(User).delete({ email: target });
+    }
+  }, 15000);
 
   it('logs in and returns only safe user fields', async () => {
     const login = await request(server)

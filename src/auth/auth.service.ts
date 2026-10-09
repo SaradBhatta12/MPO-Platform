@@ -1,10 +1,15 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { UsersService } from '../users/users.service';
 import { LoginDto } from './dto/login.dto';
 import { LoginResponseDto } from './dto/login-response.dto';
+import { RegisterDto } from './dto/register.dto';
 import { tokenExpirySeconds } from './jwt.constants';
 import { SessionsService } from './sessions.service';
 
@@ -42,6 +47,14 @@ export class AuthService {
       this.refreshLifetimeSeconds(),
     );
     return this.issueTokens(session);
+  }
+
+  async register({ email, password }: RegisterDto): Promise<void> {
+    if (Buffer.byteLength(password, 'utf8') > 72) {
+      throw new BadRequestException('Password exceeds 72 UTF-8 bytes');
+    }
+    const passwordHash = await bcrypt.hash(password, 12);
+    await this.users.createSales(email, passwordHash);
   }
 
   async refresh(refreshToken: string): Promise<AuthTokensResult> {

@@ -61,6 +61,19 @@ export class AuthRateLimitService implements OnModuleDestroy {
     );
   }
 
+  async checkRegister(ip: string, email: string): Promise<void> {
+    await this.check(
+      [
+        `auth:register:ip:${this.key(ip)}`,
+        `auth:register:email:${this.key(email.trim().toLowerCase())}`,
+      ],
+      [
+        this.config.getOrThrow<number>('REGISTER_RATE_LIMIT_IP'),
+        this.config.getOrThrow<number>('REGISTER_RATE_LIMIT_EMAIL'),
+      ],
+    );
+  }
+
   private key(value: string): string {
     return createHmac('sha256', this.keySecret).update(value).digest('hex');
   }

@@ -12,6 +12,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import {
+  ApiAcceptedResponse,
   ApiBadRequestResponse,
   ApiBearerAuth,
   ApiForbiddenResponse,
@@ -32,6 +33,8 @@ import { CookieOriginGuard } from './cookie-origin.guard';
 import { CurrentUser } from './current-user.decorator';
 import { LoginDto } from './dto/login.dto';
 import { LoginResponseDto } from './dto/login-response.dto';
+import { RegisterDto } from './dto/register.dto';
+import { RegisterResponseDto } from './dto/register-response.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { JsonBodyGuard } from './json-body.guard';
 import {
@@ -48,6 +51,27 @@ export class AuthController {
     private readonly config: ConfigService,
     private readonly rateLimit: AuthRateLimitService,
   ) {}
+
+  @Post('register')
+  @UseGuards(CookieOriginGuard, JsonBodyGuard)
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({ summary: 'Create a SALES account without issuing tokens' })
+  @ApiAcceptedResponse({ type: RegisterResponseDto })
+  @ApiBadRequestResponse({ description: 'Invalid registration body' })
+  @ApiForbiddenResponse({ description: 'Untrusted browser origin' })
+  @ApiTooManyRequestsResponse({ description: 'Registration limit exceeded' })
+  @ApiUnsupportedMediaTypeResponse({ description: 'JSON body required' })
+  async register(
+    @Body() input: RegisterDto,
+    @Req() request: Request,
+  ): Promise<RegisterResponseDto> {
+    await this.rateLimit.checkRegister(this.clientIp(request), input.email);
+    await this.auth.register(input);
+    return {
+      message: 'If the email is eligible, the account is ready for sign in.',
+    };
+  }
 
   @Post('login')
   @UseGuards(CookieOriginGuard, JsonBodyGuard)
