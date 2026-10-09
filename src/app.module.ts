@@ -38,6 +38,7 @@ import { UsersModule } from './users/users.module';
         connection: {
           host: config.getOrThrow<string>('REDIS_HOST'),
           port: config.getOrThrow<number>('REDIS_PORT'),
+          db: config.getOrThrow<number>('REDIS_DB'),
         },
       }),
     }),

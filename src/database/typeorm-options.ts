@@ -1,6 +1,8 @@
 import { join } from 'node:path';
 import { DataSourceOptions } from 'typeorm';
 import { Environment } from '../config/environment';
+import { AuthSession } from '../auth/auth-session.entity';
+import { RefreshToken } from '../auth/refresh-token.entity';
 import { User } from '../users/user.entity';
 
 type DatabaseEnvironment = Pick<
@@ -22,7 +24,7 @@ export function typeOrmOptions(
     username: environment.DATABASE_USER,
     password: environment.DATABASE_PASSWORD,
     database: environment.DATABASE_NAME,
-    entities: [User],
+    entities: [User, AuthSession, RefreshToken],
     migrations: [join(__dirname, 'migrations/*{.ts,.js}')],
     migrationsTableName: 'schema_migrations',
     synchronize: false,

@@ -10,6 +10,8 @@ describe('environment validation', () => {
     const environment = validateEnvironment(validValues);
     expect(environment.PORT).toBe(3000);
     expect(environment.DATABASE_PORT).toBe(5432);
+    expect(environment.ACCESS_TOKEN_EXPIRES_IN).toBe('15m');
+    expect(environment.REFRESH_TOKEN_EXPIRES_IN).toBe('7d');
   });
 
   it('rejects missing secrets and invalid ports without printing values', () => {
@@ -25,5 +27,8 @@ describe('environment validation', () => {
         JWT_SECRET: 'replace-with-a-random-secret-at-least-32-characters',
       }),
     ).toThrow('Invalid environment configuration: JWT_SECRET');
+    expect(() =>
+      validateEnvironment({ ...validValues, NODE_ENV: 'production' }),
+    ).toThrow('Invalid environment configuration: AUTH_ORIGIN');
   });
 });

@@ -5,6 +5,7 @@ import {
   IsInt,
   IsNotEmpty,
   IsString,
+  IsUrl,
   Matches,
   Max,
   Min,
@@ -55,14 +56,45 @@ export class Environment {
   @Max(65535)
   REDIS_PORT = 6379;
 
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(15)
+  REDIS_DB = 0;
+
   @IsString()
   @MinLength(32)
   @Matches(/^(?!replace-with-).+$/)
   JWT_SECRET!: string;
 
   @IsString()
-  @Matches(/^\d+[smhd]$/)
-  JWT_EXPIRES_IN = '1h';
+  @Matches(/^[1-9]\d*[smhd]$/)
+  ACCESS_TOKEN_EXPIRES_IN = '15m';
+
+  @IsString()
+  @Matches(/^[1-9]\d*[smhd]$/)
+  REFRESH_TOKEN_EXPIRES_IN = '7d';
+
+  @IsUrl({ require_tld: false, require_protocol: true })
+  AUTH_ORIGIN = 'http://localhost:3000';
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(1000)
+  LOGIN_RATE_LIMIT_IP = 30;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(1000)
+  LOGIN_RATE_LIMIT_EMAIL = 5;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(1000)
+  REFRESH_RATE_LIMIT_IP = 60;
 }
 
 export function validateEnvironment(
@@ -80,6 +112,19 @@ export function validateEnvironment(
     throw new Error(
       `Invalid environment configuration: ${errors.map((error) => error.property).join(', ')}`,
     );
+  }
+
+  const authOrigin = new URL(environment.AUTH_ORIGIN);
+  if (
+    authOrigin.origin !== environment.AUTH_ORIGIN ||
+    authOrigin.pathname !== '/' ||
+    authOrigin.search ||
+    authOrigin.hash ||
+    authOrigin.username ||
+    authOrigin.password ||
+    (environment.NODE_ENV === 'production' && authOrigin.protocol !== 'https:')
+  ) {
+    throw new Error('Invalid environment configuration: AUTH_ORIGIN');
   }
 
   return environment;

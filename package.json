@@ -19,11 +19,13 @@
     "migration:run:prod": "typeorm -d dist/database/data-source.js migration:run",
     "seed:dev": "ts-node src/database/seed.ts",
     "seed:dev:compiled": "node dist/database/seed.js",
+    "auth:prune": "ts-node src/auth/prune-expired-sessions.ts",
+    "auth:prune:prod": "node dist/auth/prune-expired-sessions.js",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "test:e2e": "jest --config ./test/jest-e2e.json --runInBand"
   },
   "engines": {
     "node": ">=22 <23"
