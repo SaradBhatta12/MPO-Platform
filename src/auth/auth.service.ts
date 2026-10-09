@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -54,7 +55,10 @@ export class AuthService {
       throw new BadRequestException('Password exceeds 72 UTF-8 bytes');
     }
     const passwordHash = await bcrypt.hash(password, 12);
-    await this.users.createSales(email, passwordHash);
+    const created = await this.users.createSales(email, passwordHash);
+    if (!created) {
+      throw new ConflictException('Email already registered');
+    }
   }
 
   async refresh(refreshToken: string): Promise<AuthTokensResult> {

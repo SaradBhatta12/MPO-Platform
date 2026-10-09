@@ -126,10 +126,10 @@ describe('authentication API', () => {
         email: registrationEmail.toUpperCase(),
         password: registrationPassword,
       })
-      .expect(202);
+      .expect(201);
 
     expect(response.body).toEqual({
-      message: 'If the email is eligible, the account is ready for sign in.',
+      message: 'Account created. You can sign in now.',
     });
     expect(response.headers['set-cookie']).toBeUndefined();
     expect(response.headers['cache-control']).toBe('no-store');
@@ -160,7 +160,7 @@ describe('authentication API', () => {
     });
   });
 
-  it('returns the same response for an existing account without changing its password', async () => {
+  it('reports an existing account without changing its password', async () => {
     const before = await dataSource
       .getRepository(User)
       .createQueryBuilder('user')
@@ -173,10 +173,10 @@ describe('authentication API', () => {
         email: registrationEmail.toUpperCase(),
         password: 'another-fictional-password-1234',
       })
-      .expect(202);
-    expect(response.body).toEqual({
-      message: 'If the email is eligible, the account is ready for sign in.',
-    });
+      .expect(409);
+    expect(responseBody(response.body).message).toBe(
+      'Email already registered',
+    );
     const after = await dataSource
       .getRepository(User)
       .createQueryBuilder('user')
@@ -196,6 +196,10 @@ describe('authentication API', () => {
         password: 'another-fictional-password-1234',
       })
       .expect(401);
+    await request(server)
+      .post('/auth/register')
+      .send({ email: testEmail, password: registrationPassword })
+      .expect(409);
   });
 
   it('rejects role injection, weak passwords, and passwords exceeding bcrypt input', async () => {
@@ -241,7 +245,7 @@ describe('authentication API', () => {
         await request(server)
           .post('/auth/register')
           .send({ email: target, password: registrationPassword })
-          .expect(202);
+          .expect(attempt === 0 ? 201 : 409);
       }
       await request(server)
         .post('/auth/register')

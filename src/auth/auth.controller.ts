@@ -12,9 +12,10 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import {
-  ApiAcceptedResponse,
   ApiBadRequestResponse,
   ApiBearerAuth,
+  ApiConflictResponse,
+  ApiCreatedResponse,
   ApiForbiddenResponse,
   ApiNoContentResponse,
   ApiOkResponse,
@@ -54,11 +55,17 @@ export class AuthController {
 
   @Post('register')
   @UseGuards(CookieOriginGuard, JsonBodyGuard)
-  @HttpCode(HttpStatus.ACCEPTED)
+  @HttpCode(HttpStatus.CREATED)
   @Header('Cache-Control', 'no-store')
-  @ApiOperation({ summary: 'Create a SALES account without issuing tokens' })
-  @ApiAcceptedResponse({ type: RegisterResponseDto })
+  @ApiOperation({
+    summary: 'Create a SALES account without sending email or issuing tokens',
+  })
+  @ApiCreatedResponse({
+    description: 'SALES account created and ready for sign in',
+    type: RegisterResponseDto,
+  })
   @ApiBadRequestResponse({ description: 'Invalid registration body' })
+  @ApiConflictResponse({ description: 'Email already registered' })
   @ApiForbiddenResponse({ description: 'Untrusted browser origin' })
   @ApiTooManyRequestsResponse({ description: 'Registration limit exceeded' })
   @ApiUnsupportedMediaTypeResponse({ description: 'JSON body required' })
@@ -69,7 +76,7 @@ export class AuthController {
     await this.rateLimit.checkRegister(this.clientIp(request), input.email);
     await this.auth.register(input);
     return {
-      message: 'If the email is eligible, the account is ready for sign in.',
+      message: 'Account created. You can sign in now.',
     };
   }
 

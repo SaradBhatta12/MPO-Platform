@@ -21,8 +21,8 @@ export class UsersService {
       .getOne();
   }
 
-  async createSales(email: string, passwordHash: string): Promise<void> {
-    await this.users
+  async createSales(email: string, passwordHash: string): Promise<boolean> {
+    const result = await this.users
       .createQueryBuilder()
       .insert()
       .into(User)
@@ -32,6 +32,9 @@ export class UsersService {
         role: UserRole.SALES,
       })
       .orIgnore()
+      .returning('id')
       .execute();
+    const rows: unknown = result.raw;
+    return Array.isArray(rows) && rows.length > 0;
   }
 }

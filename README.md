@@ -65,7 +65,7 @@ The API health endpoint is `http://localhost:3000/health`. Swagger is at `http:/
 
 ## Authentication
 
-`POST /auth/register` accepts a public email and password and creates a SALES account. Passwords must have 12–72 characters and be at most 72 UTF-8 bytes, the bcrypt input limit. Registration returns HTTP 202 with the same message for a new or existing email; it issues no access token or refresh cookie. The new account can then use `POST /auth/login`. Registration is available in development and production, but email ownership is **not verified**; add email verification before treating the email address as trusted. ADMIN and REVIEWER accounts must be provisioned separately.
+`POST /auth/register` accepts a public email and password and creates a SALES account. Passwords must have 12–72 characters and be at most 72 UTF-8 bytes, the bcrypt input limit. A new account returns HTTP 201 with `Account created. You can sign in now.` An existing email returns HTTP 409 with `Email already registered` and its password remains unchanged. Registration sends no email and issues no access token or refresh cookie. The new account can then use `POST /auth/login`. Registration is available in development and production, but email ownership is **not verified**; add email verification before treating the email address as trusted. ADMIN and REVIEWER accounts must be provisioned separately.
 
 `POST /auth/login` accepts a registered or seeded user's email and password. It returns `accessToken`, `tokenType`, and `expiresInSeconds` in JSON and sets an HttpOnly refresh cookie. `POST /auth/refresh` rotates that cookie and returns a new access token. `POST /auth/logout` revokes the session and clears the cookie. `GET /auth/me` requires `Authorization: Bearer <access token>` and returns only the current user's ID, email, role, and timestamps.
 
@@ -78,7 +78,7 @@ curl -i -X POST http://localhost:3000/auth/register \
 
 curl -i -c cookies.txt -X POST http://localhost:3000/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"email":"sales.a@example.test","password":"<SEED_SALES_A_PASSWORD>"}'
+  -d '{"email":"new.sales@example.test","password":"<NEW_SALES_PASSWORD>"}'
 
 curl http://localhost:3000/auth/me \
   -H 'Authorization: Bearer <accessToken-from-login>'
@@ -88,7 +88,7 @@ curl -i -b cookies.txt -c cookies.txt -X POST http://localhost:3000/auth/refresh
 curl -i -b cookies.txt -X POST http://localhost:3000/auth/logout
 ```
 
-Replace the placeholders with your own registration password, values from your local `.env`, and the login response. The examples use fictional users. Treat `cookies.txt` and access tokens as secrets; do not commit them. In a browser, send same-origin requests so its cookie policy can protect the refresh token.
+Replace the placeholders with your own registration password and the login response. Use the configured `PORT` instead of 3000 if different. `sales.a@example.test` is a seeded account; registering it again returns 409. The examples use fictional users. Treat `cookies.txt` and access tokens as secrets; do not commit them. In a browser, send same-origin requests so its cookie policy can protect the refresh token.
 
 ## Applications
 
@@ -140,7 +140,7 @@ API tests require the local PostgreSQL and Redis containers and configured `.env
 
 ## Security and trade-offs
 
-The seed command refuses to run with `NODE_ENV=production` and refuses placeholder or short passwords. It hashes seed passwords with bcrypt. Public registration hashes passwords with bcrypt cost 12, fixes the role to SALES, and rejects unknown fields such as `role`. A database uniqueness constraint and conflict-safe insert prevent duplicate emails from changing an existing password. Registration returns the same message for new and existing emails, and Redis limits attempts by IP and normalized email. As requested, public registration is enabled in production without email verification. Email addresses are therefore unverified identity claims; do not use them for password recovery or sensitive notices until ownership verification is implemented.
+The seed command refuses to run with `NODE_ENV=production` and refuses placeholder or short passwords. It hashes seed passwords with bcrypt. Public registration hashes passwords with bcrypt cost 12, fixes the role to SALES, and rejects unknown fields such as `role`. A database uniqueness constraint and conflict-safe insert prevent duplicate emails from changing an existing password. Registration returns 409 for existing emails, as requested. This reveals whether an email is registered; Redis limits attempts by IP and normalized email, but cannot fully prevent account enumeration. Public registration is enabled in production without email verification. Email addresses are therefore unverified identity claims; do not use them for password recovery or sensitive notices until ownership verification is implemented.
 
 The user entity excludes `passwordHash` from default queries, and `/auth/me` maps database users to an explicit response DTO. Login returns the same generic error for unknown emails and wrong passwords and performs a bcrypt comparison on both paths. Global DTO validation rejects unknown fields, and the HTTP exception filter suppresses internal errors. Request IDs are returned in `x-request-id` and can be propagated with a UUID header.
 
