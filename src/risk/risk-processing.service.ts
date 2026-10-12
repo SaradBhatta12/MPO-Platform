@@ -3,6 +3,10 @@ import { DataSource } from 'typeorm';
 import { AuditAction } from '../audit/audit-event.entity';
 import { AuditService } from '../audit/audit.service';
 import {
+  canEnterReview,
+  canProcessRisk,
+} from '../applications/application-policy';
+import {
   ApplicationStatus,
   MerchantApplication,
   RiskStatus,
@@ -12,14 +16,6 @@ import { RiskCheck } from './risk-check.entity';
 import { RISK_MAX_ATTEMPTS, RiskJobData } from './risk-job';
 
 export type RiskAttemptOutcome = 'done' | 'retry' | 'ignored';
-
-function isFinal(status: RiskStatus): boolean {
-  return (
-    status === RiskStatus.PASSED ||
-    status === RiskStatus.FLAGGED ||
-    status === RiskStatus.FAILED
-  );
-}
 
 @Injectable()
 export class RiskProcessingService {
@@ -54,9 +50,12 @@ export class RiskProcessingService {
         .getOne();
       if (!risk) throw new Error('Current risk check is missing');
       if (
-        isFinal(risk.status) ||
-        (application.applicationStatus !== ApplicationStatus.SUBMITTED &&
-          application.applicationStatus !== ApplicationStatus.UNDER_REVIEW)
+        !canProcessRisk(
+          application.submissionVersion,
+          data.submissionVersion,
+          application.applicationStatus,
+          risk.status,
+        )
       ) {
         return 'ignored';
       }
@@ -84,8 +83,11 @@ export class RiskProcessingService {
       risk.completedAt = now;
       application.riskStatus = risk.status;
       if (
-        application.applicationStatus === ApplicationStatus.SUBMITTED &&
-        application.assignedReviewerId !== null
+        canEnterReview(
+          application.applicationStatus,
+          risk.status,
+          application.assignedReviewerId,
+        )
       ) {
         application.applicationStatus = ApplicationStatus.UNDER_REVIEW;
       }
@@ -130,10 +132,14 @@ export class RiskProcessingService {
         applicationId: data.applicationId,
         submissionVersion: data.submissionVersion,
       });
-      if (!risk || isFinal(risk.status)) return;
       if (
-        application.applicationStatus !== ApplicationStatus.SUBMITTED &&
-        application.applicationStatus !== ApplicationStatus.UNDER_REVIEW
+        !risk ||
+        !canProcessRisk(
+          application.submissionVersion,
+          data.submissionVersion,
+          application.applicationStatus,
+          risk.status,
+        )
       ) {
         return;
       }
@@ -144,8 +150,11 @@ export class RiskProcessingService {
       risk.completedAt = new Date();
       application.riskStatus = RiskStatus.FAILED;
       if (
-        application.applicationStatus === ApplicationStatus.SUBMITTED &&
-        application.assignedReviewerId !== null
+        canEnterReview(
+          application.applicationStatus,
+          risk.status,
+          application.assignedReviewerId,
+        )
       ) {
         application.applicationStatus = ApplicationStatus.UNDER_REVIEW;
       }

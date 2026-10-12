@@ -7,7 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository, SelectQueryBuilder } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { AuditAction } from '../audit/audit-event.entity';
 import {
   AuditService,
@@ -37,38 +37,13 @@ import {
 } from './dto/record-decision.dto';
 import { UpdateApplicationDto } from './dto/update-application.dto';
 import { ReviewDecision } from './review-decision.entity';
-
-function visibleTo(
-  query: SelectQueryBuilder<MerchantApplication>,
-  actor: UserResponseDto,
-): SelectQueryBuilder<MerchantApplication> {
-  if (actor.role === UserRole.SALES) {
-    return query.andWhere('application.created_by_id = :actorId', {
-      actorId: actor.id,
-    });
-  }
-  if (actor.role === UserRole.REVIEWER) {
-    return query.andWhere('application.assigned_reviewer_id = :actorId', {
-      actorId: actor.id,
-    });
-  }
-  return query;
-}
-
-function editable(application: MerchantApplication): boolean {
-  return (
-    application.applicationStatus === ApplicationStatus.DRAFT ||
-    application.applicationStatus === ApplicationStatus.INFO_REQUESTED
-  );
-}
-
-function riskComplete(status: RiskStatus): boolean {
-  return (
-    status === RiskStatus.PASSED ||
-    status === RiskStatus.FLAGGED ||
-    status === RiskStatus.FAILED
-  );
-}
+import {
+  canEnterReview,
+  canRecordDecision,
+  canSubmit,
+  isEditable,
+  visibleTo,
+} from './application-policy';
 
 function canonicalMoney(value: string): string {
   const [whole, fractional = ''] = value.split('.');
@@ -182,7 +157,7 @@ export class ApplicationsService {
         actor,
         id,
       );
-      if (!editable(application)) {
+      if (!isEditable(application.applicationStatus)) {
         throw new ConflictException('Application is not editable');
       }
       if (input.businessName !== undefined)
@@ -237,8 +212,7 @@ export class ApplicationsService {
         id,
       );
       if (
-        !editable(application) ||
-        application.submissionVersion >= 2147483647
+        !canSubmit(application.applicationStatus, application.submissionVersion)
       ) {
         throw new ConflictException('Application cannot be submitted');
       }
@@ -308,8 +282,11 @@ export class ApplicationsService {
       const previousReviewerId = application.assignedReviewerId;
       application.assignedReviewerId = reviewer.id;
       if (
-        application.applicationStatus === ApplicationStatus.SUBMITTED &&
-        riskComplete(application.riskStatus)
+        canEnterReview(
+          application.applicationStatus,
+          application.riskStatus,
+          application.assignedReviewerId,
+        )
       ) {
         application.applicationStatus = ApplicationStatus.UNDER_REVIEW;
       }
@@ -338,17 +315,16 @@ export class ApplicationsService {
       throw new ForbiddenException('Only assigned reviewers can decide');
     }
     return this.dataSource.transaction(async (manager) => {
-      const application = await manager
-        .getRepository(MerchantApplication)
-        .createQueryBuilder('application')
-        .setLock('pessimistic_write')
-        .where('application.id = :id', { id })
-        .andWhere('application.assigned_reviewer_id = :actorId', {
-          actorId: actor.id,
-        })
-        .getOne();
+      const application = await visibleTo(
+        manager
+          .getRepository(MerchantApplication)
+          .createQueryBuilder('application')
+          .setLock('pessimistic_write')
+          .where('application.id = :id', { id }),
+        actor,
+      ).getOne();
       if (!application) throw new NotFoundException('Application not found');
-      if (application.applicationStatus !== ApplicationStatus.UNDER_REVIEW) {
+      if (!canRecordDecision(application.applicationStatus)) {
         throw new ConflictException('Application is not under review');
       }
       await manager.insert(ReviewDecision, {
